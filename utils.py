@@ -43,6 +43,9 @@ def get_numpy_values(val):
 #%% plotting functions
 
 
+# TODO: Add scalebars to plotting functions
+
+
 # function from JP imageUtils, adjusted for different figure size
 def showSlice(img,sliceN=None,lims=None,dim=0,**kwargs):
 	if sliceN is None:
@@ -156,6 +159,105 @@ def showSliceBeforeAfter(mask1, mask2, sliceN=None,lims=None,dim=0,**kwargs):
 
 	return im
 
+def showSliceInteractive(imgs, lims=None, dim=0, titles=None, **kwargs):
+    """
+    imgs: single image-like OR iterable of image-like objects with `.array`
+    lims: (vmin, vmax) or None -> uses global range across all imgs
+    dim: slicing dimension (0/1/2)
+    titles: list of titles per image (optional)
+    kwargs: passed to imshow (e.g. cmap='gray')
+    """
+    # --- normalize input to a list ---
+    if not isinstance(imgs, (list, tuple)):
+        imgs = [imgs]
+
+    # --- squeeze & validate ---
+    volumes = []
+    for img in imgs:
+        vol = np.squeeze(img.array)
+        if vol.ndim != 3:
+            raise ValueError("Only 3D images are supported after squeezing.")
+        volumes.append(vol)
+
+    # --- require compatible shape for chosen dim (same slice index meaning) ---
+    # simplest: require same shape along dim; you can relax if you want
+    n_slices = [v.shape[dim] for v in volumes]
+    if len(set(n_slices)) != 1:
+        raise ValueError(f"All volumes must have the same number of slices along dim={dim}. Got {n_slices}")
+
+    max_slice = n_slices[0] - 1
+
+    # --- global min/max for shared contrast slider ---
+    global_min = float(min(np.min(v) for v in volumes))
+    global_max = float(max(np.max(v) for v in volumes))
+
+    # --- widgets ---
+    slider_slice = widgets.IntSlider(
+        min=0, max=max_slice, step=1, value=max_slice // 2, description="Slice"
+    )
+
+    init_vmin = global_min if lims is None else lims[0]
+    init_vmax = global_max if lims is None else lims[1]
+
+    step = (global_max - global_min) / 100 if global_max > global_min else 1.0
+    slider_vrange = widgets.FloatRangeSlider(
+        value=[init_vmin, init_vmax],
+        min=global_min,
+        max=global_max,
+        step=step,
+        description="vmin/vmax",
+        continuous_update=True
+    )
+
+    display(widgets.VBox([slider_slice, slider_vrange]))
+
+    # --- slice helper ---
+    def get_slice(volume, index):
+        sl = [slice(None)] * 3
+        sl[dim] = index
+        return volume[tuple(sl)]
+
+    # --- figure with N panels ---
+    n = len(volumes)
+    fig, axes = plt.subplots(1, n, figsize=(6*n, 6), squeeze=False,  constrained_layout=True)
+    axes = axes[0]
+
+    cmap = kwargs.get("cmap", "gray")
+    vmin, vmax = slider_vrange.value
+
+    im_artists = []
+    for i, (ax, vol) in enumerate(zip(axes, volumes)):
+        im = ax.imshow(get_slice(vol, slider_slice.value), cmap=cmap, vmin=vmin, vmax=vmax)
+        im_artists.append(im)
+
+        if titles and i < len(titles):
+            ax.set_title(f"{titles[i]} — Slice {slider_slice.value}")
+        else:
+            ax.set_title(f"Image {i+1} — Slice {slider_slice.value}")
+        ax.axis("off")
+
+    #plt.tight_layout()
+    plt.show()
+
+    # --- callbacks update all images ---
+    def update_all(_change=None):
+        idx = slider_slice.value
+        vmin, vmax = slider_vrange.value
+
+        for i, (im, vol, ax) in enumerate(zip(im_artists, volumes, axes)):
+            im.set_data(get_slice(vol, idx))
+            im.set_clim(vmin=vmin, vmax=vmax)
+
+            if titles and i < len(titles):
+                ax.set_title(f"{titles[i]} — Slice {idx}")
+            else:
+                ax.set_title(f"Image {i+1} — Slice {idx}")
+
+        fig.canvas.draw_idle()
+
+    slider_slice.observe(update_all, names="value")
+    slider_vrange.observe(update_all, names="value")
+
 # def showSliceInteractive(img, lims=None, dim=0, **kwargs):
 #     # Handle image input
 #     image = np.squeeze(img.array)
@@ -164,121 +266,61 @@ def showSliceBeforeAfter(mask1, mask2, sliceN=None,lims=None,dim=0,**kwargs):
 
 #     # Get number of slices in the chosen dimension
 #     max_slice = image.shape[dim] - 1
-#     slider_slice = widgets.IntSlider(min=0, max=max_slice, step=1, value=max_slice // 2, description="Slice")
+#     slider_slice = widgets.IntSlider(
+#         min=0, max=max_slice, step=1, value=max_slice // 2, description="Slice"
+#     )
 
-#     # Intensity range sliders for contrast adjustment
+#     # Intensity range slider (combined vmin/vmax)
 #     min_val = float(np.min(image))
 #     max_val = float(np.max(image))
-#     slider_vmin = widgets.FloatSlider(min=min_val, max=max_val, step=(max_val - min_val) / 100,
-#                                       value=min_val if lims is None else lims[0], description="vmin")
-#     slider_vmax = widgets.FloatSlider(min=min_val, max=max_val, step=(max_val - min_val) / 100,
-#                                       value=max_val if lims is None else lims[1], description="vmax")
+#     slider_vrange = widgets.FloatRangeSlider(
+#         value=[min_val if lims is None else lims[0],
+#                max_val if lims is None else lims[1]],
+#         min=min_val,
+#         max=max_val,
+#         step=(max_val - min_val) / 100,
+#         description="vmin/vmax",
+#         continuous_update=True
+#     )
 
-#     # Set up initial slice
+#     # Get slice function
 #     def get_slice(index):
 #         slices = [slice(None)] * 3
 #         slices[dim] = index
 #         return image[tuple(slices)]
 
-#     # Create figure once
+#     # Display UI above plot
+#     ui = widgets.VBox([
+#         slider_slice,
+#         slider_vrange
+#     ])
+#     display(ui)
+
+#     # Create figure
 #     fig, ax = plt.subplots(figsize=(8, 6))
 #     initial_img = get_slice(slider_slice.value)
-#     imshow_args = {'cmap': kwargs.get('cmap', 'gray'),
-#                    'vmin': slider_vmin.value, 'vmax': slider_vmax.value}
-#     img_disp = ax.imshow(initial_img, **imshow_args)
+#     vmin, vmax = slider_vrange.value
+#     img_disp = ax.imshow(initial_img, cmap=kwargs.get('cmap', 'gray'),
+#                          vmin=vmin, vmax=vmax)
 #     ax.set_title(f"Slice {slider_slice.value}")
 #     plt.tight_layout()
 #     fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
 #     plt.show()
 
-#     # Update slice callback
+#     # Update callbacks
 #     def update_slice(change):
-#         new_slice = slider_slice.value
-#         img_disp.set_data(get_slice(new_slice))
-#         ax.set_title(f"Slice {new_slice}")
+#         img_disp.set_data(get_slice(slider_slice.value))
+#         ax.set_title(f"Slice {slider_slice.value}")
 #         fig.canvas.draw_idle()
 
-#     # Update contrast callback
 #     def update_contrast(change):
-#         img_disp.set_clim(vmin=slider_vmin.value, vmax=slider_vmax.value)
+#         vmin, vmax = slider_vrange.value
+#         img_disp.set_clim(vmin=vmin, vmax=vmax)
 #         fig.canvas.draw_idle()
 
 #     # Link sliders
 #     slider_slice.observe(update_slice, names='value')
-#     slider_vmin.observe(update_contrast, names='value')
-#     slider_vmax.observe(update_contrast, names='value')
-
-#     # Display UI
-#     ui = widgets.VBox([
-#         slider_slice,
-#         widgets.HBox([slider_vmin, slider_vmax])
-#     ])
-#     display(ui)
-
-
-def showSliceInteractive(img, lims=None, dim=0, **kwargs):
-    # Handle image input
-    image = np.squeeze(img.array)
-    if image.ndim != 3:
-        raise ValueError("Only 3D images are supported after squeezing.")
-
-    # Get number of slices in the chosen dimension
-    max_slice = image.shape[dim] - 1
-    slider_slice = widgets.IntSlider(
-        min=0, max=max_slice, step=1, value=max_slice // 2, description="Slice"
-    )
-
-    # Intensity range slider (combined vmin/vmax)
-    min_val = float(np.min(image))
-    max_val = float(np.max(image))
-    slider_vrange = widgets.FloatRangeSlider(
-        value=[min_val if lims is None else lims[0],
-               max_val if lims is None else lims[1]],
-        min=min_val,
-        max=max_val,
-        step=(max_val - min_val) / 100,
-        description="vmin/vmax",
-        continuous_update=True
-    )
-
-    # Get slice function
-    def get_slice(index):
-        slices = [slice(None)] * 3
-        slices[dim] = index
-        return image[tuple(slices)]
-
-    # Display UI above plot
-    ui = widgets.VBox([
-        slider_slice,
-        slider_vrange
-    ])
-    display(ui)
-
-    # Create figure
-    fig, ax = plt.subplots(figsize=(8, 6))
-    initial_img = get_slice(slider_slice.value)
-    vmin, vmax = slider_vrange.value
-    img_disp = ax.imshow(initial_img, cmap=kwargs.get('cmap', 'gray'),
-                         vmin=vmin, vmax=vmax)
-    ax.set_title(f"Slice {slider_slice.value}")
-    plt.tight_layout()
-    fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
-    plt.show()
-
-    # Update callbacks
-    def update_slice(change):
-        img_disp.set_data(get_slice(slider_slice.value))
-        ax.set_title(f"Slice {slider_slice.value}")
-        fig.canvas.draw_idle()
-
-    def update_contrast(change):
-        vmin, vmax = slider_vrange.value
-        img_disp.set_clim(vmin=vmin, vmax=vmax)
-        fig.canvas.draw_idle()
-
-    # Link sliders
-    slider_slice.observe(update_slice, names='value')
-    slider_vrange.observe(update_contrast, names='value')
+#     slider_vrange.observe(update_contrast, names='value')
 
 
 def showSliceBeforeAfterInteractive(mask1, mask2, dim=0, **kwargs):
@@ -340,92 +382,353 @@ def showSliceBeforeAfterInteractive(mask1, mask2, dim=0, **kwargs):
 	display(slider)
  
  
-
-def showOverlayInteractive(gray_image, binary_mask, dim=0, mask_color='red', initial_alpha=0.4, **kwargs):
-    # Convert to arrays and squeeze
+def showOverlayInteractive(
+    gray_image,
+    binary_mask=None,
+    dim=0,
+    mask_color="red",
+    initial_alpha=0.4,
+    use_clip_ignore_zeros=True,
+    initial_mask_range=None,
+    frame_px=3,                 # NEW: frame thickness in pixels
+    frame_color=None,           # NEW: if None, uses mask_color
+    **kwargs
+):
     gray = np.squeeze(gray_image.array)
-    mask = np.squeeze(binary_mask.array).astype(np.uint8)  # ensure numeric 0/1
 
-    # Check dimensions
-    if gray.ndim != 3 or mask.ndim != 3:
-        raise ValueError("Both images must be 3D after squeezing.")
-    if gray.shape != mask.shape:
-        raise ValueError("Grayscale image and binary mask must have the same shape.")
+    mask = None
+    if binary_mask is not None:
+        mask = np.squeeze(binary_mask.array).astype(np.uint16)  # allow labels
+        if gray.ndim != 3 or mask.ndim != 3:
+            raise ValueError("Both images must be 3D after squeezing.")
+        if gray.shape != mask.shape:
+            raise ValueError("Grayscale image and binary mask must have the same shape.")
+    else:
+        if gray.ndim != 3:
+            raise ValueError("gray_image must be 3D after squeezing.")
+
+    # initial display vmin/vmax
+    if use_clip_ignore_zeros:
+        nz = gray > 0
+        if np.any(nz):
+            vmin, vmax = np.percentile(gray[nz], (1, 99))
+        else:
+            vmin, vmax = float(gray.min()), float(gray.max())
+    else:
+        vmin, vmax = float(gray.min()), float(gray.max())
+
+    min_val, max_val = float(gray.min()), float(gray.max())
 
     max_slice = gray.shape[dim] - 1
     slider_slice = widgets.IntSlider(min=0, max=max_slice, step=1, value=max_slice // 2, description="Slice")
 
-    # Intensity range for grayscale image (single range slider)
-    min_val = float(np.min(gray))
-    max_val = float(np.max(gray))
     slider_vrange = widgets.FloatRangeSlider(
-        value=[min_val, max_val],
+        value=[float(vmin), float(vmax)],
         min=min_val,
         max=max_val,
-        step=(max_val - min_val) / 100,
+        step=(max_val - min_val) / 100 if max_val > min_val else 1.0,
         description="vmin/vmax",
         continuous_update=True
     )
 
-    # Alpha slider for transparency
     slider_alpha = widgets.FloatSlider(min=0.0, max=1.0, step=0.01, value=initial_alpha, description="Alpha")
 
-    def get_slice(index):
-        slices = [slice(None)] * 3
-        slices[dim] = index
-        return gray[tuple(slices)], mask[tuple(slices)]
+    # Only used if no mask provided
+    if binary_mask is None:
+        if initial_mask_range is None:
+            if use_clip_ignore_zeros and np.any(gray > 0):
+                lo0, hi0 = np.percentile(gray[gray > 0], (10, 90))
+            else:
+                lo0, hi0 = np.percentile(gray, (10, 90))
+            initial_mask_range = (float(lo0), float(hi0))
 
-    # Set up plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    gray_slice, mask_slice = get_slice(slider_slice.value)
+        slider_mask_range = widgets.FloatRangeSlider(
+            value=[float(initial_mask_range[0]), float(initial_mask_range[1])],
+            min=min_val,
+            max=max_val,
+            step=(max_val - min_val) / 200 if max_val > min_val else 1.0,
+            description="Mask range",
+            continuous_update=True
+        )
 
-    # Grayscale layer
-    img_gray = ax.imshow(gray_slice, cmap='gray', interpolation='nearest',
-                         vmin=slider_vrange.value[0], vmax=slider_vrange.value[1], **kwargs)
+    def get_slice(arr, index):
+        s = [slice(None)] * 3
+        s[dim] = index
+        return arr[tuple(s)]
 
-    # Mask colormap (transparent for 0, solid for 1)
-    cmap = colors.ListedColormap([(0, 0, 0, 0), colors.to_rgba(mask_color)])
-    img_mask = ax.imshow(mask_slice, cmap=cmap, alpha=slider_alpha.value, interpolation='nearest')
+    def compute_mask_from_range(gray_slice):
+        lo, hi = slider_mask_range.value
+        return ((gray_slice >= lo) & (gray_slice <= hi)).astype(np.uint8)
 
-    title = ax.set_title(f"Slice {slider_slice.value}")
-    ax.axis('off')
+    # NEW: small helper to add a colored frame to a 2D slice
+    def add_frame(a2d, thickness, value):
+        if thickness <= 0:
+            return a2d
+        out = a2d.copy()
+        t = int(thickness)
+        out[:t, :] = value
+        out[-t:, :] = value
+        out[:, :t] = value
+        out[:, -t:] = value
+        return out
+
+    # initial slice
+    idx0 = slider_slice.value
+    gray_slice = get_slice(gray, idx0)
+
+    if mask is not None:
+        mask_slice = get_slice(mask, idx0)
+    else:
+        mask_slice = compute_mask_from_range(gray_slice)
+
+    # NEW: determine if mask is binary (0/1) or label (0..N)
+    is_label_mask = False
+    if mask is not None:
+        u = np.unique(mask_slice)
+        # label mask if it contains integers beyond {0,1}
+        is_label_mask = np.any((u != 0) & (u != 1))
+
+    # NEW: build a robust label colormap (good for <= 5 labels, safe beyond)
+    # First five are colorblind-friendly-ish and very distinguishable.
+    base = [
+        (0.90, 0.10, 0.10, 1.0),  # red
+        (0.10, 0.60, 0.10, 1.0),  # green
+        (0.10, 0.35, 0.90, 1.0),  # blue
+        (0.95, 0.65, 0.10, 1.0),  # orange
+        (0.60, 0.20, 0.80, 1.0),  # purple
+    ]
+    def label_cmap_for(max_label):
+        # index 0 is fully transparent background
+        if max_label <= 0:
+            cols = [(0, 0, 0, 0)]
+        else:
+            cols = [(0, 0, 0, 0)] + [base[(i - 1) % len(base)] for i in range(1, max_label + 1)]
+        return colors.ListedColormap(cols)
+
+    fig, ax = plt.subplots()
+    img_gray = ax.imshow(
+        gray_slice, cmap="gray", interpolation="nearest",
+        vmin=slider_vrange.value[0], vmax=slider_vrange.value[1], **kwargs
+    )
+
+    # NEW: frame (default color = mask_color)
+    fc = frame_color if frame_color is not None else mask_color
+    frame_rgba = colors.to_rgba(fc)
+    # a separate overlay array: 0 = transparent, 1 = frame color
+    frame_arr = add_frame(np.zeros_like(gray_slice, dtype=np.uint8), frame_px, 1)
+    frame_cmap = colors.ListedColormap([(0, 0, 0, 0), frame_rgba])
+    img_frame = ax.imshow(frame_arr, cmap=frame_cmap, interpolation="nearest", vmin=0, vmax=1)
+
+    if mask is None or (mask is not None and not is_label_mask):
+        # old behavior: binary mask (or computed from range)
+        cmap = colors.ListedColormap([(0, 0, 0, 0), colors.to_rgba(mask_color)])
+        img_mask = ax.imshow(mask_slice.astype(np.uint8), cmap=cmap, alpha=slider_alpha.value,
+                             interpolation="nearest", vmin=0, vmax=1)
+        mask_vmin, mask_vmax = 0, 1
+    else:
+        # NEW: label mask behavior
+        max_label = int(mask_slice.max())
+        cmap = label_cmap_for(max_label)
+        img_mask = ax.imshow(mask_slice.astype(np.int32), cmap=cmap, alpha=slider_alpha.value,
+                             interpolation="nearest", vmin=0, vmax=max_label)
+        mask_vmin, mask_vmax = 0, max_label
+
+    title = ax.set_title(f"Slice {idx0}")
+    ax.axis("off")
     plt.tight_layout()
-    fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
 
-    # Update functions
-    def update_slice(change):
-        index = slider_slice.value
-        gray_slice, mask_slice = get_slice(index)
-        img_gray.set_data(gray_slice)
-        img_mask.set_data(mask_slice)
-        title.set_text(f"Slice {index}")
+    def update_slice(change=None):
+        idx = slider_slice.value
+        g = get_slice(gray, idx)
+        img_gray.set_data(g)
+
+        # update frame to correct shape (in case shapes vary)
+        f = add_frame(np.zeros_like(g, dtype=np.uint8), frame_px, 1)
+        img_frame.set_data(f)
+
+        if mask is not None:
+            m = get_slice(mask, idx)
+        else:
+            m = compute_mask_from_range(g)
+
+        img_mask.set_data(m)
+
+        # NEW: if label mask, adapt colormap/vmax when labels change across slices
+        if mask is not None:
+            u = np.unique(m)
+            label_now = np.any((u != 0) & (u != 1))
+            if label_now:
+                ml = int(m.max())
+                img_mask.set_cmap(label_cmap_for(ml))
+                img_mask.set_clim(vmin=0, vmax=ml)
+            else:
+                img_mask.set_cmap(colors.ListedColormap([(0, 0, 0, 0), colors.to_rgba(mask_color)]))
+                img_mask.set_clim(vmin=0, vmax=1)
+
+        title.set_text(f"Slice {idx}")
         fig.canvas.draw_idle()
 
-    def update_alpha(change):
+    def update_alpha(change=None):
         img_mask.set_alpha(slider_alpha.value)
         fig.canvas.draw_idle()
 
-    def update_contrast(change):
-        vmin, vmax = slider_vrange.value
-        img_gray.set_clim(vmin=vmin, vmax=vmax)
+    def update_contrast(change=None):
+        vmin_, vmax_ = slider_vrange.value
+        img_gray.set_clim(vmin=vmin_, vmax=vmax_)
         fig.canvas.draw_idle()
 
-    # Connect sliders
-    slider_slice.observe(update_slice, names='value')
-    slider_alpha.observe(update_alpha, names='value')
-    slider_vrange.observe(update_contrast, names='value')
+    slider_slice.observe(update_slice, names="value")
+    slider_alpha.observe(update_alpha, names="value")
+    slider_vrange.observe(update_contrast, names="value")
+    if binary_mask is None:
+        slider_mask_range.observe(update_slice, names="value")
 
-    # Display
-    ui = widgets.VBox([
-        slider_slice,
-        slider_vrange,
-        slider_alpha
-    ])
-    display(ui)
+    controls = [slider_slice, slider_vrange]
+    if binary_mask is None:
+        controls.append(slider_mask_range)
+    controls.append(slider_alpha)
+
+    display(widgets.VBox(controls))
     plt.show()
  
 
-# def showOverlayInteractive(gray_image, binary_mask, dim=0, mask_color='red', initial_alpha=0.4, **kwargs):
+# def showOverlayInteractive(
+#     gray_image,
+#     binary_mask=None,
+#     dim=0,
+#     mask_color="red",
+#     initial_alpha=0.4,
+#     use_clip_ignore_zeros=True,
+#     initial_mask_range=None,
+#     **kwargs
+# ):
+#     gray = np.squeeze(gray_image.array)
+
+#     mask = None
+#     if binary_mask is not None:
+#         mask = np.squeeze(binary_mask.array).astype(np.uint8)
+#         if gray.ndim != 3 or mask.ndim != 3:
+#             raise ValueError("Both images must be 3D after squeezing.")
+#         if gray.shape != mask.shape:
+#             raise ValueError("Grayscale image and binary mask must have the same shape.")
+#     else:
+#         if gray.ndim != 3:
+#             raise ValueError("gray_image must be 3D after squeezing.")
+
+#     # initial display vmin/vmax
+#     if use_clip_ignore_zeros:
+#         nz = gray > 0
+#         if np.any(nz):
+#             vmin, vmax = np.percentile(gray[nz], (1, 99))
+#         else:
+#             vmin, vmax = float(gray.min()), float(gray.max())
+#     else:
+#         vmin, vmax = float(gray.min()), float(gray.max())
+
+#     min_val, max_val = float(gray.min()), float(gray.max())
+
+#     max_slice = gray.shape[dim] - 1
+#     slider_slice = widgets.IntSlider(min=0, max=max_slice, step=1, value=max_slice // 2, description="Slice")
+
+#     slider_vrange = widgets.FloatRangeSlider(
+#         value=[float(vmin), float(vmax)],
+#         min=min_val,
+#         max=max_val,
+#         step=(max_val - min_val) / 100 if max_val > min_val else 1.0,
+#         description="vmin/vmax",
+#         continuous_update=True
+#     )
+
+#     slider_alpha = widgets.FloatSlider(min=0.0, max=1.0, step=0.01, value=initial_alpha, description="Alpha")
+
+#     # Only used if no mask provided
+#     if binary_mask is None:
+#         if initial_mask_range is None:
+#             if use_clip_ignore_zeros and np.any(gray > 0):
+#                 lo0, hi0 = np.percentile(gray[gray > 0], (10, 90))
+#             else:
+#                 lo0, hi0 = np.percentile(gray, (10, 90))
+#             initial_mask_range = (float(lo0), float(hi0))
+
+#         slider_mask_range = widgets.FloatRangeSlider(
+#             value=[float(initial_mask_range[0]), float(initial_mask_range[1])],
+#             min=min_val,
+#             max=max_val,
+#             step=(max_val - min_val) / 200 if max_val > min_val else 1.0,
+#             description="Mask range",
+#             continuous_update=True
+#         )
+
+#     def get_slice(arr, index):
+#         s = [slice(None)] * 3
+#         s[dim] = index
+#         return arr[tuple(s)]
+
+#     def compute_mask_from_range(gray_slice):
+#         lo, hi = slider_mask_range.value
+#         return ((gray_slice >= lo) & (gray_slice <= hi)).astype(np.uint8)
+
+#     # initial slice
+#     idx0 = slider_slice.value
+#     gray_slice = get_slice(gray, idx0)
+#     if mask is not None:
+#         mask_slice = get_slice(mask, idx0)
+#     else:
+#         mask_slice = compute_mask_from_range(gray_slice)
+
+#     fig, ax = plt.subplots()
+#     img_gray = ax.imshow(
+#         gray_slice, cmap="gray", interpolation="nearest",
+#         vmin=slider_vrange.value[0], vmax=slider_vrange.value[1], **kwargs
+#     )
+
+#     cmap = colors.ListedColormap([(0, 0, 0, 0), colors.to_rgba(mask_color)])
+#     img_mask = ax.imshow(mask_slice, cmap=cmap, alpha=slider_alpha.value,
+#                          interpolation="nearest", vmin=0, vmax=1)
+
+#     title = ax.set_title(f"Slice {idx0}")
+#     ax.axis("off")
+#     plt.tight_layout()
+
+#     def update_slice(change=None):
+#         idx = slider_slice.value
+#         g = get_slice(gray, idx)
+#         img_gray.set_data(g)
+
+#         if mask is not None:
+#             m = get_slice(mask, idx)
+#         else:
+#             m = compute_mask_from_range(g)
+#         img_mask.set_data(m)
+
+#         title.set_text(f"Slice {idx}")
+#         fig.canvas.draw_idle()
+
+#     def update_alpha(change=None):
+#         img_mask.set_alpha(slider_alpha.value)
+#         fig.canvas.draw_idle()
+
+#     def update_contrast(change=None):
+#         vmin_, vmax_ = slider_vrange.value
+#         img_gray.set_clim(vmin=vmin_, vmax=vmax_)
+#         fig.canvas.draw_idle()
+
+#     slider_slice.observe(update_slice, names="value")
+#     slider_alpha.observe(update_alpha, names="value")
+#     slider_vrange.observe(update_contrast, names="value")
+#     if binary_mask is None:
+#         slider_mask_range.observe(update_slice, names="value")
+
+#     controls = [slider_slice, slider_vrange]
+#     if binary_mask is None:
+#         controls.append(slider_mask_range)
+#     controls.append(slider_alpha)
+
+#     display(widgets.VBox(controls))
+#     plt.show()
+
+ 
+# def showOverlayInteractive(gray_image, binary_mask, dim=0, mask_color='red', initial_alpha=0.4, use_clip_ignore_zeros=True, **kwargs):
 #     # Convert to arrays and squeeze
 #     gray = np.squeeze(gray_image.array)
 #     mask = np.squeeze(binary_mask.array).astype(np.uint8)  # ensure numeric 0/1
@@ -435,17 +738,31 @@ def showOverlayInteractive(gray_image, binary_mask, dim=0, mask_color='red', ini
 #         raise ValueError("Both images must be 3D after squeezing.")
 #     if gray.shape != mask.shape:
 #         raise ValueError("Grayscale image and binary mask must have the same shape.")
+    
+#     # Compute initial vmin/vmax
+#     if use_clip_ignore_zeros:
+#         mask_nonzero = gray > 0
+#         if np.any(mask_nonzero):
+#             vmin, vmax = np.percentile(gray[mask_nonzero], (1, 99))
+#         else:
+#             vmin, vmax = float(np.min(gray)), float(np.max(gray))
+#     else:
+#         vmin, vmax = float(np.min(gray)), float(np.max(gray))
 
 #     max_slice = gray.shape[dim] - 1
 #     slider_slice = widgets.IntSlider(min=0, max=max_slice, step=1, value=max_slice // 2, description="Slice")
 
-#     # Intensity range for grayscale image
+#     # Intensity range for grayscale image (single range slider)
 #     min_val = float(np.min(gray))
 #     max_val = float(np.max(gray))
-#     slider_vmin = widgets.FloatSlider(min=min_val, max=max_val, step=(max_val - min_val) / 100,
-#                                       value=min_val, description="vmin")
-#     slider_vmax = widgets.FloatSlider(min=min_val, max=max_val, step=(max_val - min_val) / 100,
-#                                       value=max_val, description="vmax")
+#     slider_vrange = widgets.FloatRangeSlider(
+#         value=[vmin, vmax],
+#         min=min_val,
+#         max=max_val,
+#         step=(max_val - min_val) / 100 if max_val > min_val else 1.0,
+#         description="vmin/vmax",
+#         continuous_update=True
+#     )
 
 #     # Alpha slider for transparency
 #     slider_alpha = widgets.FloatSlider(min=0.0, max=1.0, step=0.01, value=initial_alpha, description="Alpha")
@@ -454,24 +771,41 @@ def showOverlayInteractive(gray_image, binary_mask, dim=0, mask_color='red', ini
 #         slices = [slice(None)] * 3
 #         slices[dim] = index
 #         return gray[tuple(slices)], mask[tuple(slices)]
+    
+#     max_fig_size = 10
+#     min_fig_size = 4
 
-#     # Set up plot
-#     fig, ax = plt.subplots(figsize=(8, 6))
+#     # --- Auto figure size based on slice dimensions ---
+#     test_slice, _ = get_slice(slider_slice.value)
+#     h, w = test_slice.shape
+#     aspect_ratio = w / h
+
+#     if aspect_ratio >= 1:  # wide image
+#         fig_w = max_fig_size
+#         fig_h = max(min_fig_size, max_fig_size / aspect_ratio)
+#     else:  # tall image
+#         fig_w = max(min_fig_size, max_fig_size * aspect_ratio)
+#         fig_h = max_fig_size
+        
+#     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    
 #     gray_slice, mask_slice = get_slice(slider_slice.value)
 
 #     # Grayscale layer
-#     img_gray = ax.imshow(gray_slice, cmap='gray', interpolation='nearest',
-#                          vmin=slider_vmin.value, vmax=slider_vmax.value, **kwargs)
+#     img_gray = ax.imshow(
+#         gray_slice, cmap='gray', interpolation='nearest',
+#         vmin=slider_vrange.value[0], vmax=slider_vrange.value[1], **kwargs
+#     )
 
 #     # Mask colormap (transparent for 0, solid for 1)
 #     cmap = colors.ListedColormap([(0, 0, 0, 0), colors.to_rgba(mask_color)])
 
-#     # Dummy mask for init
-#     dummy_mask = np.zeros_like(mask_slice, dtype=np.uint8)
-#     dummy_mask[0, 0] = 1  # ensures min/max present
-#     img_mask = ax.imshow(dummy_mask, cmap=cmap,
-#                          alpha=slider_alpha.value, interpolation='nearest')
-#     img_mask.set_data(mask_slice)
+#     # ⬇️ Fix: pin normalization so all-zero initial slices don't break it
+#     img_mask = ax.imshow(
+#         mask_slice, cmap=cmap, alpha=slider_alpha.value,
+#         interpolation='nearest', vmin=0, vmax=1
+#         # Alternatively: norm=colors.BoundaryNorm([-0.5, 0.5, 1.5], ncolors=2)
+#     )
 
 #     title = ax.set_title(f"Slice {slider_slice.value}")
 #     ax.axis('off')
@@ -483,7 +817,7 @@ def showOverlayInteractive(gray_image, binary_mask, dim=0, mask_color='red', ini
 #         index = slider_slice.value
 #         gray_slice, mask_slice = get_slice(index)
 #         img_gray.set_data(gray_slice)
-#         img_mask.set_data(mask_slice)  # no re-cast, already uint8
+#         img_mask.set_data(mask_slice)
 #         title.set_text(f"Slice {index}")
 #         fig.canvas.draw_idle()
 
@@ -492,23 +826,22 @@ def showOverlayInteractive(gray_image, binary_mask, dim=0, mask_color='red', ini
 #         fig.canvas.draw_idle()
 
 #     def update_contrast(change):
-#         img_gray.set_clim(vmin=slider_vmin.value, vmax=slider_vmax.value)
+#         vmin, vmax = slider_vrange.value
+#         img_gray.set_clim(vmin=vmin, vmax=vmax)
 #         fig.canvas.draw_idle()
 
 #     # Connect sliders
 #     slider_slice.observe(update_slice, names='value')
 #     slider_alpha.observe(update_alpha, names='value')
-#     slider_vmin.observe(update_contrast, names='value')
-#     slider_vmax.observe(update_contrast, names='value')
+#     slider_vrange.observe(update_contrast, names='value')
 
 #     # Display
-#     ui = widgets.VBox([
-#         slider_slice,
-#         widgets.HBox([slider_vmin, slider_vmax]),
-#         slider_alpha
-#     ])
+#     ui = widgets.VBox([slider_slice, slider_vrange, slider_alpha])
 #     display(ui)
 #     plt.show()
+ 
+
+
 
 ############################################################################################################
 # functions to work on binned volumes or part of the volume
@@ -659,14 +992,14 @@ def bin_volume(img, bin_factor=8, target_img=None):
 		y_zoom = ysz / round(ysz/bin_factor)
 		z_zoom = zsz / round(zsz/bin_factor)
 	
-		img_binned = gtrans.zoom3dImg(img, 1/x_zoom, 1/y_zoom, 1/z_zoom, PyIPSDK.eZoomInterpolationMethod.eZIM_NearestNeighbour)
+		img_binned = gtrans.zoom3dImg(img, 1/x_zoom, 1/y_zoom, 1/z_zoom, PyIPSDK.eZoomInterpolationMethod.eZIM_VolumeWeightedMean)
   
 	else:
 		x_zoom = xsz / target_img.getSizeX()
 		y_zoom = ysz / target_img.getSizeY()
 		z_zoom = zsz / target_img.getSizeZ()
 	
-		img_binned = gtrans.zoom3dImg(img, 1/x_zoom, 1/y_zoom, 1/z_zoom, PyIPSDK.eZoomInterpolationMethod.eZIM_NearestNeighbour)
+		img_binned = gtrans.zoom3dImg(img, 1/x_zoom, 1/y_zoom, 1/z_zoom, PyIPSDK.eZoomInterpolationMethod.eZIM_VolumeWeightedMean)
  
 	return img_binned
 
@@ -689,7 +1022,7 @@ def unbin_volume(img_binned, bin_factor=8, target_img=None):
 		z_zoom = zsz / img_binned.getSizeZ()
  
 	
-	img = gtrans.zoom3dImg(img_binned, x_zoom, y_zoom, z_zoom, PyIPSDK.eZoomInterpolationMethod.eZIM_NearestNeighbour)
+	img = gtrans.zoom3dImg(img_binned, x_zoom, y_zoom, z_zoom, PyIPSDK.eZoomInterpolationMethod.eZIM_Linear)
  
 	return img
 
